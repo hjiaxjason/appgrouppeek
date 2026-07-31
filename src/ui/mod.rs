@@ -4,6 +4,7 @@
 //! write time by `anstream` when stdout is not a terminal, so callers never have
 //! to branch on whether colour is wanted.
 
+pub mod diff;
 pub mod tree;
 pub mod value;
 
