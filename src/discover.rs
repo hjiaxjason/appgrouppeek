@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 /// A simulator that can be inspected.
@@ -34,6 +34,18 @@ impl Device {
     pub fn is_booted(&self) -> bool {
         self.state.eq_ignore_ascii_case("Booted")
     }
+}
+
+/// An App Group container declared by an app.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppGroup {
+    /// The group identifier as declared in the app's entitlements.
+    ///
+    /// Note this does **not** reliably begin with `group.` — `systemgroup.…` and
+    /// bare identifiers such as `com.apple.CoreODI` both occur in practice.
+    pub id: String,
+    /// Absolute path to the container on the host filesystem.
+    pub path: PathBuf,
 }
 
 /// Runs `xcrun simctl` with the given arguments and returns its stdout.
@@ -139,6 +151,135 @@ pub fn devices() -> Result<Vec<Device>> {
     parse_devices(&simctl(&["list", "devices", "-j"])?)
 }
 
+/// Picks the device to operate on.
+///
+/// With no request, the single booted device is used. Ambiguity is always an error
+/// rather than an arbitrary choice, because picking the wrong simulator produces a
+/// confusingly empty container rather than an obvious failure.
+pub fn select_device(available: Vec<Device>, requested: Option<&str>) -> Result<Device> {
+    match requested {
+        Some(query) => select_by_query(available, query),
+        None => select_booted(available),
+    }
+}
+
+/// Resolves an explicit `--device` request against UDID first, then name.
+fn select_by_query(available: Vec<Device>, query: &str) -> Result<Device> {
+    if let Some(device) = available
+        .iter()
+        .find(|device| device.udid.eq_ignore_ascii_case(query))
+    {
+        return Ok(device.clone());
+    }
+
+    let mut by_name: Vec<Device> = available
+        .iter()
+        .filter(|device| device.name.eq_ignore_ascii_case(query))
+        .cloned()
+        .collect();
+
+    match by_name.len() {
+        1 => Ok(by_name.remove(0)),
+        0 => Err(anyhow!(
+            "no simulator matches `{query}`\n\navailable:\n{}",
+            bullet_list(&available)
+        )),
+        _ => Err(anyhow!(
+            "`{query}` matches {} simulators — pass a UDID instead:\n{}",
+            by_name.len(),
+            bullet_list(&by_name)
+        )),
+    }
+}
+
+/// Resolves the implicit case: exactly one booted simulator.
+fn select_booted(available: Vec<Device>) -> Result<Device> {
+    let mut booted: Vec<Device> = available
+        .iter()
+        .filter(|device| device.is_booted())
+        .cloned()
+        .collect();
+
+    match booted.len() {
+        1 => Ok(booted.remove(0)),
+        0 => Err(anyhow!(
+            "no booted simulator — boot one, or pass --device\n\navailable:\n{}",
+            bullet_list(&available)
+        )),
+        _ => Err(anyhow!(
+            "{} simulators are booted — pass --device to choose:\n{}",
+            booted.len(),
+            bullet_list(&booted)
+        )),
+    }
+}
+
+/// Renders devices as an indented list for use inside error messages.
+fn bullet_list(devices: &[Device]) -> String {
+    if devices.is_empty() {
+        return "  (none)".to_string();
+    }
+    devices
+        .iter()
+        .map(|device| format!("  {} ({}, {})", device.name, device.runtime, device.udid))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Parses the tab-separated output of `simctl get_app_container … groups`.
+///
+/// # Layout
+///
+/// One line per group, `identifier<TAB>absolute-path`. Paths may contain spaces,
+/// so the split is on the first tab only.
+///
+/// # Edge cases
+///
+/// Blank lines are skipped. A line with no tab is malformed and is an error rather
+/// than silently dropped, since silently losing a group would be worse than failing.
+pub fn parse_groups(stdout: &str) -> Result<Vec<AppGroup>> {
+    stdout
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (id, path) = line
+                .split_once('\t')
+                .ok_or_else(|| anyhow!("unexpected line from simctl: {line:?}"))?;
+            Ok(AppGroup {
+                id: id.trim().to_string(),
+                path: PathBuf::from(path.trim()),
+            })
+        })
+        .collect()
+}
+
+/// Lists the App Groups declared by an installed app.
+///
+/// # Errors
+///
+/// Distinguishes the two failure modes that look identical in simctl's own output:
+/// the app not being installed, and the app declaring no groups at all. Both are
+/// errors here — an empty success would leave the user unsure which happened.
+pub fn app_groups(device: &Device, bundle_id: &str) -> Result<Vec<AppGroup>> {
+    let stdout =
+        simctl(&["get_app_container", &device.udid, bundle_id, "groups"]).with_context(|| {
+            format!(
+                "could not read App Groups for `{bundle_id}` on {} ({}) — is the app installed?",
+                device.name, device.udid
+            )
+        })?;
+
+    let groups = parse_groups(&stdout)?;
+    if groups.is_empty() {
+        bail!(
+            "`{bundle_id}` is installed on {} but declares no App Groups",
+            device.name
+        );
+    }
+    Ok(groups)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +313,10 @@ mod tests {
       }
     }"#;
 
+    fn devices() -> Vec<Device> {
+        parse_devices(DEVICE_LIST).expect("fixture parses")
+    }
+
     #[test]
     fn friendly_runtime_formats_ios_versions() {
         assert_eq!(
@@ -191,7 +336,7 @@ mod tests {
 
     #[test]
     fn parse_devices_skips_unavailable_and_sorts_booted_first() {
-        let devices = parse_devices(DEVICE_LIST).expect("fixture parses");
+        let devices = devices();
         assert_eq!(devices.len(), 2, "the unavailable device is filtered out");
         assert_eq!(devices[0].name, "iPhone 17");
         assert!(devices[0].is_booted());
@@ -201,5 +346,108 @@ mod tests {
     #[test]
     fn parse_devices_rejects_malformed_json() {
         assert!(parse_devices("{ not json").is_err());
+    }
+
+    #[test]
+    fn select_device_defaults_to_the_only_booted_device() {
+        let device = select_device(devices(), None).expect("one booted device");
+        assert_eq!(device.name, "iPhone 17");
+    }
+
+    #[test]
+    fn select_device_errors_when_nothing_is_booted() {
+        let shutdown: Vec<Device> = devices()
+            .into_iter()
+            .map(|mut device| {
+                device.state = "Shutdown".into();
+                device
+            })
+            .collect();
+
+        let err = select_device(shutdown, None).unwrap_err().to_string();
+        assert!(err.contains("no booted simulator"), "got: {err}");
+        assert!(err.contains("iPhone 17 Pro"), "lists candidates: {err}");
+    }
+
+    #[test]
+    fn select_device_errors_when_several_are_booted() {
+        let booted: Vec<Device> = devices()
+            .into_iter()
+            .map(|mut device| {
+                device.state = "Booted".into();
+                device
+            })
+            .collect();
+
+        let err = select_device(booted, None).unwrap_err().to_string();
+        assert!(err.contains("2 simulators are booted"), "got: {err}");
+    }
+
+    #[test]
+    fn select_device_matches_udid_case_insensitively() {
+        let device = select_device(devices(), Some("b943f0cb-ed32-487f-9d2d-f1977c064ae7"))
+            .expect("matches by udid");
+        assert_eq!(device.name, "iPhone 17");
+    }
+
+    #[test]
+    fn select_device_matches_by_name() {
+        let device = select_device(devices(), Some("iPhone 17 Pro")).expect("matches by name");
+        assert!(!device.is_booted());
+    }
+
+    #[test]
+    fn select_device_reports_unknown_names() {
+        let err = select_device(devices(), Some("iPad"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no simulator matches `iPad`"), "got: {err}");
+    }
+
+    #[test]
+    fn select_device_reports_ambiguous_names() {
+        let mut duplicated = devices();
+        duplicated[1].name = "iPhone 17".into();
+
+        let err = select_device(duplicated, Some("iPhone 17"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("matches 2 simulators"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_groups_splits_on_the_first_tab() {
+        let groups = parse_groups(
+            "group.com.apple.weather\t/tmp/App Group/one\n\
+             systemgroup.com.apple.accessorysetupkit\t/tmp/two\n",
+        )
+        .expect("parses");
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].id, "group.com.apple.weather");
+        assert_eq!(groups[0].path, PathBuf::from("/tmp/App Group/one"));
+        assert_eq!(groups[1].id, "systemgroup.com.apple.accessorysetupkit");
+    }
+
+    #[test]
+    fn parse_groups_accepts_identifiers_without_the_group_prefix() {
+        let groups = parse_groups("com.apple.CoreODI\t/tmp/odi").expect("parses");
+        assert_eq!(groups[0].id, "com.apple.CoreODI");
+    }
+
+    #[test]
+    fn parse_groups_ignores_blank_lines() {
+        let groups = parse_groups("\n\ngroup.a\t/tmp/a\n\n").expect("parses");
+        assert_eq!(groups.len(), 1);
+    }
+
+    #[test]
+    fn parse_groups_rejects_lines_without_a_tab() {
+        assert!(parse_groups("group.a /tmp/a").is_err());
+    }
+
+    #[test]
+    fn parse_groups_returns_empty_for_empty_output() {
+        assert!(parse_groups("").expect("parses").is_empty());
     }
 }
