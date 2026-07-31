@@ -94,6 +94,6 @@ fn groups(cli: &Cli, bundle_id: &str) -> Result<()> {
 
 /// Writes a value to stdout as pretty-printed JSON.
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
+    anstream::println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
