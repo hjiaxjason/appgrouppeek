@@ -83,4 +83,23 @@ pub enum Command {
         #[arg(long)]
         raw: bool,
     },
+
+    /// Record the current contents of a container
+    Snapshot {
+        /// App Group identifier, or the container's UUID
+        group_id: String,
+
+        /// Write to this file instead of standard output
+        #[arg(long, short, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
+
+    /// Compare two snapshots
+    Diff {
+        /// The earlier snapshot
+        before: PathBuf,
+
+        /// The later snapshot
+        after: PathBuf,
+    },
 }
