@@ -5,13 +5,15 @@
 
 mod cli;
 mod decode;
+mod diff;
 mod discover;
+mod snapshot;
 mod source;
 mod ui;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
@@ -50,7 +52,49 @@ fn run(cli: &Cli) -> Result<()> {
             limit,
         } => cat(cli, group_id, path, *raw, *limit),
         Command::Defaults { group_id, raw } => defaults(cli, group_id, *raw),
+        Command::Snapshot { group_id, output } => snapshot(cli, group_id, output.as_deref()),
+        Command::Diff { before, after } => diff(cli, before, after),
     }
+}
+
+/// Records the current contents of a container.
+fn snapshot(cli: &Cli, group_id: &str, output: Option<&Path>) -> Result<()> {
+    let device = discover::select_device(discover::devices()?, cli.device.as_deref())?;
+    let resolved = discover::resolve_container(&device, group_id)?;
+    let container = Container::new(resolved.path.clone());
+
+    let snapshot = snapshot::Snapshot::capture(&container, &resolved, &device)?;
+    let json = serde_json::to_string_pretty(&snapshot)?;
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, format!("{json}\n"))
+                .with_context(|| format!("could not write `{}`", path.display()))?;
+            // To stderr so `-o` output stays scriptable when stdout is piped.
+            anstream::eprintln!(
+                "wrote {} ({} files) to {}",
+                resolved.id,
+                snapshot.files.len(),
+                path.display()
+            );
+        }
+        None => anstream::println!("{json}"),
+    }
+    Ok(())
+}
+
+/// Compares two snapshots.
+fn diff(cli: &Cli, before: &Path, after: &Path) -> Result<()> {
+    let before = snapshot::Snapshot::load(before)?;
+    let after = snapshot::Snapshot::load(after)?;
+    let changes = diff::compare(&before, &after)?;
+
+    if cli.json {
+        return print_json(&changes);
+    }
+
+    anstream::print!("{}", ui::diff::render(&changes));
+    Ok(())
 }
 
 /// Shows a file from a container, decoded where possible.
