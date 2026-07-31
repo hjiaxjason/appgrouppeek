@@ -166,6 +166,97 @@ fn cat_rejects_a_path_that_escapes_the_container() {
 }
 
 #[test]
+fn help_lists_the_snapshot_subcommands() {
+    agpeek()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("snapshot"))
+        .stdout(contains("diff"));
+}
+
+#[test]
+fn diff_requires_two_snapshots() {
+    agpeek()
+        .args(["diff", "only-one.json"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("<AFTER>"));
+}
+
+/// `diff` reads snapshot files, so the whole comparison is exercisable end to
+/// end without a simulator — unlike `ls` and `cat`, which reach their container
+/// only through discovery.
+#[test]
+fn diff_reports_a_changed_key_between_two_snapshot_files() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let before = dir.path().join("before.json");
+    let after = dir.path().join("after.json");
+
+    std::fs::write(&before, snapshot_json("t0", 3)).expect("write");
+    std::fs::write(&after, snapshot_json("t1", 4)).expect("write");
+
+    agpeek()
+        .args([
+            "diff",
+            before.to_str().expect("utf8"),
+            after.to_str().expect("utf8"),
+            "--no-color",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("~ usageCount: 3 → 4"));
+}
+
+#[test]
+fn diff_refuses_snapshots_of_different_groups() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let before = dir.path().join("before.json");
+    let after = dir.path().join("after.json");
+
+    std::fs::write(&before, snapshot_json("t0", 3)).expect("write");
+    std::fs::write(
+        &after,
+        snapshot_json("t1", 4).replace("group.example", "group.other"),
+    )
+    .expect("write");
+
+    agpeek()
+        .args([
+            "diff",
+            before.to_str().expect("utf8"),
+            after.to_str().expect("utf8"),
+            "--no-color",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("different groups"));
+}
+
+/// A minimal snapshot holding one plist with one key.
+fn snapshot_json(taken_at: &str, usage_count: u32) -> String {
+    format!(
+        r#"{{
+  "version": 1,
+  "group_id": "group.example",
+  "container_uuid": "UUID",
+  "device_udid": "DEVICE",
+  "taken_at": "{taken_at}",
+  "files": [
+    {{
+      "path": "Library/Preferences/group.example.plist",
+      "size": 100,
+      "sha256": "{usage_count:064}",
+      "content": {{ "usageCount": {usage_count} }}
+    }}
+  ]
+}}"#
+    )
+}
+
+#[test]
 fn version_is_reported() {
     agpeek()
         .arg("--version")
