@@ -6,7 +6,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -151,6 +151,19 @@ impl Container {
             .collect();
 
         Ok(entries)
+    }
+
+    /// Reads a file from the container.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the path is missing, is a directory, or cannot be read. The
+    /// message names the path relative to the container, not the host.
+    pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        if path.is_dir() {
+            bail!("`{}` is a directory", self.display(path));
+        }
+        std::fs::read(path).with_context(|| format!("could not read `{}`", self.display(path)))
     }
 
     /// Renders a path for messages, relative to the container root where possible.
@@ -403,6 +416,33 @@ mod tests {
         assert!(
             names(&entries).contains(&"note.txt".to_string()),
             "the rest of the tree is still listed"
+        );
+    }
+
+    #[test]
+    fn read_returns_file_contents() {
+        let (_dir, container) = fixture();
+        let path = container.root().join("note.txt");
+        assert_eq!(container.read(&path).expect("reads"), b"hello");
+    }
+
+    #[test]
+    fn read_rejects_a_directory() {
+        let (_dir, container) = fixture();
+        let path = container.root().join("Library");
+        let err = container.read(&path).unwrap_err().to_string();
+        assert!(err.contains("is a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn read_names_the_path_relative_to_the_container() {
+        let (_dir, container) = fixture();
+        let path = container.root().join("Library/missing.plist");
+        let err = container.read(&path).unwrap_err().to_string();
+        assert!(err.contains("Library/missing.plist"), "got: {err}");
+        assert!(
+            !err.contains(container.root().to_str().expect("utf8")),
+            "got: {err}"
         );
     }
 
