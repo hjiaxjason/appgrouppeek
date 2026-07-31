@@ -48,6 +48,146 @@ pub struct AppGroup {
     pub path: PathBuf,
 }
 
+/// Which of the two shared-container roots a container lives under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerKind {
+    /// `Containers/Shared/AppGroup` — declared by an app's entitlements.
+    App,
+    /// `Containers/Shared/SystemGroup` — created by system daemons.
+    System,
+}
+
+impl ContainerKind {
+    /// Directory name under `Containers/Shared`.
+    fn dir_name(self) -> &'static str {
+        match self {
+            Self::App => "AppGroup",
+            Self::System => "SystemGroup",
+        }
+    }
+}
+
+impl std::fmt::Display for ContainerKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::App => "app",
+            Self::System => "system",
+        })
+    }
+}
+
+/// A shared container found on disk.
+#[derive(Debug, Clone, Serialize)]
+pub struct Container {
+    /// Group identifier read from the container's metadata.
+    pub id: String,
+    /// Which root the container lives under.
+    pub kind: ContainerKind,
+    /// The container directory's own UUID, which is unique where `id` is not.
+    pub uuid: String,
+    /// Absolute path to the container.
+    pub path: PathBuf,
+}
+
+/// Filename of the per-container metadata plist written by the container manager.
+const METADATA_PLIST: &str = ".com.apple.mobile_container_manager.metadata.plist";
+
+/// Key inside that plist holding the group identifier.
+const METADATA_ID_KEY: &str = "MCMMetadataIdentifier";
+
+/// Reads the group identifier out of a container's metadata plist.
+///
+/// Returns `None` rather than an error for anything unreadable or unexpected: the
+/// scan walks every container on the device, and one malformed neighbour must not
+/// prevent finding the container actually being looked for.
+fn read_container_id(container: &std::path::Path) -> Option<String> {
+    let value = plist::Value::from_file(container.join(METADATA_PLIST)).ok()?;
+    Some(
+        value
+            .as_dictionary()?
+            .get(METADATA_ID_KEY)?
+            .as_string()?
+            .to_string(),
+    )
+}
+
+/// Lists every shared container on a device, across both roots.
+///
+/// Ordering is by kind then UUID so output and error messages are deterministic.
+pub fn containers(device: &Device) -> Result<Vec<Container>> {
+    let mut found = Vec::new();
+
+    for kind in [ContainerKind::App, ContainerKind::System] {
+        let root = device
+            .data_path
+            .join("Containers/Shared")
+            .join(kind.dir_name());
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            // A device that has never booted has no container roots at all.
+            continue;
+        };
+
+        let mut in_root: Vec<Container> = entries
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .filter_map(|entry| {
+                let path = entry.path();
+                Some(Container {
+                    id: read_container_id(&path)?,
+                    kind,
+                    uuid: path.file_name()?.to_string_lossy().into_owned(),
+                    path,
+                })
+            })
+            .collect();
+
+        in_root.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+        found.append(&mut in_root);
+    }
+
+    Ok(found)
+}
+
+/// Resolves a group identifier to a single container.
+///
+/// Accepts either a group identifier or a container UUID. Group identifiers are
+/// **not** unique — `systemgroup.com.apple.accessorysetupkit` exists under both
+/// roots on a stock simulator, with different contents — so an ambiguous match is
+/// an error listing the candidates, and the UUID is the way to disambiguate.
+pub fn resolve_container(device: &Device, query: &str) -> Result<Container> {
+    let available = containers(device)?;
+
+    if let Some(container) = available
+        .iter()
+        .find(|container| container.uuid.eq_ignore_ascii_case(query))
+    {
+        return Ok(container.clone());
+    }
+
+    let matches: Vec<&Container> = available
+        .iter()
+        .filter(|container| container.id == query)
+        .collect();
+
+    match matches.as_slice() {
+        [only] => Ok((*only).clone()),
+        [] => Err(anyhow!(
+            "no container for `{query}` on {}\n\nrun `agpeek groups <bundle-id>` to see what an app declares",
+            device.name
+        )),
+        several => Err(anyhow!(
+            "`{query}` matches {} containers — pass the UUID instead:\n{}",
+            several.len(),
+            several
+                .iter()
+                .map(|container| format!("  {} ({})", container.uuid, container.kind))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )),
+    }
+}
+
 /// Runs `xcrun simctl` with the given arguments and returns its stdout.
 ///
 /// # Errors
