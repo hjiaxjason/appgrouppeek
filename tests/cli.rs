@@ -90,6 +90,37 @@ fn errors_carry_no_ansi_escapes_when_stderr_is_not_a_terminal() {
 }
 
 #[test]
+fn help_lists_the_ls_subcommand() {
+    agpeek()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("ls"));
+}
+
+#[test]
+fn ls_requires_a_group_id() {
+    agpeek()
+        .arg("ls")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("<GROUP_ID>"));
+}
+
+#[test]
+fn ls_rejects_a_path_that_escapes_the_container() {
+    // Resolution happens before the walk, so this fails on the path argument
+    // rather than needing a container that actually exists.
+    agpeek()
+        .args(["ls", "group.does.not.exist", "../../etc", "--no-color"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("error:"));
+}
+
+#[test]
 fn version_is_reported() {
     agpeek()
         .arg("--version")
