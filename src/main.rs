@@ -4,19 +4,23 @@
 //! [`discover`] and all rendering in [`ui`].
 
 mod cli;
+mod decode;
 mod discover;
 mod source;
 mod ui;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::source::sim::{Container, EntryKind, WalkOptions};
 use crate::ui::Column;
 use crate::ui::tree::Node;
+
+/// Bytes of a hexdump shown when falling back from a failed decode.
+const DEFAULT_HEX_LIMIT: usize = 2048;
 
 fn main() {
     let cli = Cli::parse();
@@ -39,7 +43,116 @@ fn run(cli: &Cli) -> Result<()> {
             depth,
             all,
         } => ls(cli, group_id, path.as_deref(), *depth, *all),
+        Command::Cat {
+            group_id,
+            path,
+            raw,
+            limit,
+        } => cat(cli, group_id, path, *raw, *limit),
+        Command::Defaults { group_id, raw } => defaults(cli, group_id, *raw),
     }
+}
+
+/// Shows a file from a container, decoded where possible.
+fn cat(cli: &Cli, group_id: &str, path: &Path, raw: bool, limit: usize) -> Result<()> {
+    let (container, resolved) = open_container(cli, group_id)?;
+    let file = container.resolve(Some(path))?;
+    let bytes = container.read(&file)?;
+    show(
+        cli,
+        &bytes,
+        raw,
+        limit,
+        &format!("{} ▸ {}", resolved.id, path.display()),
+    )
+}
+
+/// Shows the shared `UserDefaults` suite for a group.
+fn defaults(cli: &Cli, group_id: &str, raw: bool) -> Result<()> {
+    let (container, resolved) = open_container(cli, group_id)?;
+
+    // The suite is always stored under the group's own identifier, which is not
+    // necessarily what the user typed — they may have passed a container UUID.
+    let relative = PathBuf::from("Library/Preferences").join(format!("{}.plist", resolved.id));
+    let file = container.resolve(Some(&relative))?;
+
+    if !file.exists() {
+        bail!(
+            "`{}` has no shared UserDefaults yet\n\nexpected {}\nnothing has written to the suite on this device",
+            resolved.id,
+            relative.display()
+        );
+    }
+
+    let bytes = container.read(&file)?;
+    show(cli, &bytes, raw, 0, &resolved.id)
+}
+
+/// Resolves a group identifier to a container ready to read.
+fn open_container(cli: &Cli, group_id: &str) -> Result<(Container, discover::Container)> {
+    let device = discover::select_device(discover::devices()?, cli.device.as_deref())?;
+    let resolved = discover::resolve_container(&device, group_id)?;
+    Ok((Container::new(resolved.path.clone()), resolved))
+}
+
+/// Renders file bytes, decoded unless `raw` was asked for.
+fn show(cli: &Cli, bytes: &[u8], raw: bool, limit: usize, label: &str) -> Result<()> {
+    if raw {
+        return show_raw(cli, bytes, limit, label);
+    }
+
+    let decoded = decode::decode(bytes);
+
+    if cli.json {
+        let body = match &decoded.body {
+            decode::Body::Value(value) => serde_json::to_value(value)?,
+            decode::Body::Text(text) => serde_json::Value::String(text.clone()),
+            decode::Body::Opaque => serde_json::Value::Null,
+        };
+        return print_json(&serde_json::json!({
+            "path": label,
+            "format": decoded.format,
+            "bytes": bytes.len(),
+            "note": decoded.note,
+            "value": body,
+        }));
+    }
+
+    match &decoded.body {
+        decode::Body::Value(value) => anstream::print!("{}", ui::value::render(value)),
+        decode::Body::Text(text) => anstream::print!("{text}"),
+        decode::Body::Opaque => {
+            // Nothing decodable, so say what it is and fall back to the bytes.
+            match &decoded.note {
+                Some(note) => anstream::println!("{} — {note}", decoded.format),
+                None => anstream::println!("{}, {} bytes", decoded.format, bytes.len()),
+            }
+            if !bytes.is_empty() {
+                anstream::print!("{}", ui::value::hexdump(bytes, DEFAULT_HEX_LIMIT));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Renders bytes without decoding them.
+///
+/// Text passes through verbatim so `--raw` on a config file stays readable;
+/// anything else is hexdumped rather than spraying control bytes at the terminal.
+fn show_raw(cli: &Cli, bytes: &[u8], limit: usize, label: &str) -> Result<()> {
+    if cli.json {
+        return print_json(&serde_json::json!({
+            "path": label,
+            "bytes": bytes.len(),
+            "base64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+        }));
+    }
+
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !text.contains('\0') => anstream::print!("{text}"),
+        _ => anstream::print!("{}", ui::value::hexdump(bytes, limit)),
+    }
+    Ok(())
 }
 
 /// Lists every inspectable simulator.
