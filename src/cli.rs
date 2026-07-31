@@ -13,6 +13,10 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
+    /// Simulator to inspect, by UDID or name (defaults to the only booted device)
+    #[arg(long, global = true, value_name = "UDID|NAME")]
+    pub device: Option<String>,
+
     /// Emit machine-readable JSON instead of a formatted table
     #[arg(long, global = true)]
     pub json: bool,
@@ -27,4 +31,10 @@ pub struct Cli {
 pub enum Command {
     /// List simulators that can be inspected
     Devices,
+
+    /// List the App Groups an installed app declares
+    Groups {
+        /// Bundle identifier of the app, e.g. `app.natively`
+        bundle_id: String,
+    },
 }
