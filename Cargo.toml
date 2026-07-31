@@ -27,6 +27,8 @@ walkdir = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Base64 encodes plist Data values for --json, which has no byte-string type
 base64 = "0.22"
+# Sha2 fingerprints file contents so snapshots can be compared without them
+sha2 = "0.10"
 
 [dev-dependencies]
 # Assert_cmd drives the built binary in integration tests
