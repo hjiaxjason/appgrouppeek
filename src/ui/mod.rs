@@ -108,10 +108,13 @@ fn pad(cell: &str, width: usize) -> String {
 }
 
 /// Prints an error and its full cause chain to stderr.
+///
+/// Uses `anstream` rather than `std::eprintln!` so the styling is stripped when
+/// stderr is redirected to a file or pipe.
 pub fn print_error(error: &anyhow::Error) {
-    eprintln!("{ERROR}error:{ERROR:#} {error}");
+    anstream::eprintln!("{ERROR}error:{ERROR:#} {error}");
     for cause in error.chain().skip(1) {
-        eprintln!("  caused by: {cause}");
+        anstream::eprintln!("  caused by: {cause}");
     }
 }
 
