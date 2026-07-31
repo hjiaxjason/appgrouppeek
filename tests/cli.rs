@@ -74,6 +74,22 @@ fn unknown_device_is_reported_with_the_error_prefix() {
 }
 
 #[test]
+fn errors_carry_no_ansi_escapes_when_stderr_is_not_a_terminal() {
+    // assert_cmd captures stderr through a pipe, so anstream must strip styling
+    // even without --no-color. Colour leaking into redirected output is a bug.
+    let output = agpeek()
+        .args(["groups", "com.example.app", "--device", "no-such-simulator"])
+        .output()
+        .expect("runs");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "stderr contained ANSI escapes: {stderr:?}"
+    );
+}
+
+#[test]
 fn version_is_reported() {
     agpeek()
         .arg("--version")
