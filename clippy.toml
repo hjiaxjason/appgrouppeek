@@ -1,0 +1,5 @@
+# `unwrap_used` and `expect_used` are denied in `Cargo.toml` because panicking on
+# container contents is the one thing this tool must never do (PRD R1). Inside
+# tests, panicking on a bad fixture is exactly the right behaviour.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
