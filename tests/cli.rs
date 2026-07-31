@@ -121,6 +121,51 @@ fn ls_rejects_a_path_that_escapes_the_container() {
 }
 
 #[test]
+fn help_lists_the_decoding_subcommands() {
+    agpeek()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("cat"))
+        .stdout(contains("defaults"));
+}
+
+#[test]
+fn cat_requires_a_group_id_and_a_path() {
+    agpeek()
+        .args(["cat", "group.example"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("<PATH>"));
+}
+
+#[test]
+fn defaults_requires_a_group_id() {
+    agpeek()
+        .arg("defaults")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("<GROUP_ID>"));
+}
+
+#[test]
+fn cat_rejects_a_path_that_escapes_the_container() {
+    agpeek()
+        .args([
+            "cat",
+            "group.does.not.exist",
+            "../../etc/passwd",
+            "--no-color",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("error:"));
+}
+
+#[test]
 fn version_is_reported() {
     agpeek()
         .arg("--version")
