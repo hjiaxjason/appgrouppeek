@@ -25,6 +25,8 @@ plist = "1"
 walkdir = "2"
 # Chrono renders file mtimes in local time
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Base64 encodes plist Data values for --json, which has no byte-string type
+base64 = "0.22"
 
 [dev-dependencies]
 # Assert_cmd drives the built binary in integration tests

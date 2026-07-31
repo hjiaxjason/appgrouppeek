@@ -10,6 +10,7 @@ dependencies = [
  "anstyle",
  "anyhow",
  "assert_cmd",
+ "base64",
  "chrono",
  "clap",
  "plist",
