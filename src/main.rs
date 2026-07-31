@@ -5,13 +5,18 @@
 
 mod cli;
 mod discover;
+mod source;
 mod ui;
+
+use std::path::Path;
 
 use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
+use crate::source::sim::{Container, EntryKind, WalkOptions};
 use crate::ui::Column;
+use crate::ui::tree::Node;
 
 fn main() {
     let cli = Cli::parse();
@@ -28,6 +33,12 @@ fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Devices => devices(cli),
         Command::Groups { bundle_id } => groups(cli, bundle_id),
+        Command::Ls {
+            group_id,
+            path,
+            depth,
+            all,
+        } => ls(cli, group_id, path.as_deref(), *depth, *all),
     }
 }
 
@@ -89,6 +100,71 @@ fn groups(cli: &Cli, bundle_id: &str) -> Result<()> {
         "{}",
         ui::table(&[Column::new("GROUP"), Column::dim("PATH")], &rows)
     );
+    Ok(())
+}
+
+/// Shows the file tree of a container.
+fn ls(
+    cli: &Cli,
+    group_id: &str,
+    path: Option<&Path>,
+    depth: Option<usize>,
+    all: bool,
+) -> Result<()> {
+    let device = discover::select_device(discover::devices()?, cli.device.as_deref())?;
+    let resolved = discover::resolve_container(&device, group_id)?;
+
+    let container = Container::new(resolved.path.clone());
+    let start = container.resolve(path)?;
+    let entries = container.walk(
+        &start,
+        &WalkOptions {
+            max_depth: depth,
+            all,
+        },
+    )?;
+
+    if cli.json {
+        return print_json(&serde_json::json!({
+            "group_id": resolved.id,
+            "kind": resolved.kind,
+            "uuid": resolved.uuid,
+            "root": container.root(),
+            "path": path,
+            "entries": entries,
+        }));
+    }
+
+    let names: Vec<String> = entries
+        .iter()
+        .map(crate::source::sim::Entry::name)
+        .collect();
+    let nodes: Vec<Node<'_>> = entries
+        .iter()
+        .zip(&names)
+        .map(|(entry, name)| Node {
+            depth: entry.depth,
+            name,
+            detail: match entry.kind {
+                // A directory's own size is an allocation detail, not information.
+                EntryKind::Dir => String::new(),
+                EntryKind::Unreadable => entry.error.clone().unwrap_or_default(),
+                _ => ui::human_size(entry.size),
+            },
+            modified: ui::format_time(entry.modified),
+        })
+        .collect();
+
+    let label = match path {
+        Some(path) => format!("{} ▸ {}", resolved.id, path.display()),
+        None => resolved.id.clone(),
+    };
+
+    anstream::print!("{}", ui::tree::render(&label, &nodes));
+
+    if entries.is_empty() {
+        anstream::println!("(empty)");
+    }
     Ok(())
 }
 
