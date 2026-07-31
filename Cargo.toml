@@ -19,11 +19,19 @@ anstyle = "1"
 # Unicode-width measures how many terminal columns a string occupies, which is
 # what table alignment needs — CJK glyphs are one char but two columns wide
 unicode-width = "0.2"
+# Plist reads the binary container metadata that maps a group ID to its path
+plist = "1"
+# Walkdir traverses container trees without following symlinks
+walkdir = "2"
+# Chrono renders file mtimes in local time
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 # Assert_cmd drives the built binary in integration tests
 assert_cmd = "2"
 predicates = "3"
+# Tempfile builds container fixtures on disk for the walk tests
+tempfile = "3"
 
 [lints.rust]
 missing_docs = "warn"
