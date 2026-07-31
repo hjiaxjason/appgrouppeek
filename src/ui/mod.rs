@@ -5,6 +5,7 @@
 //! to branch on whether colour is wanted.
 
 pub mod tree;
+pub mod value;
 
 use std::fmt::Write as _;
 use std::time::SystemTime;
