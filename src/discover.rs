@@ -64,8 +64,7 @@ fn simctl(args: &[&str]) -> Result<String> {
         .with_context(|| format!("failed to run `{}`", rendered()))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.trim();
+        let detail = condense(&String::from_utf8_lossy(&output.stderr));
         if detail.is_empty() {
             bail!("`{}` failed with {}", rendered(), output.status);
         }
@@ -73,6 +72,15 @@ fn simctl(args: &[&str]) -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Flattens multi-line tool output into a single line.
+///
+/// simctl reports failures across three lines, repeating the underlying strerror
+/// text. Collapsing it keeps the cause chain readable, since the actionable part
+/// is already in the context message wrapping it.
+fn condense(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Shape of `xcrun simctl list devices -j`, keyed by runtime identifier.
@@ -413,6 +421,21 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("matches 2 simulators"), "got: {err}");
+    }
+
+    #[test]
+    fn condense_flattens_simctls_multi_line_stderr() {
+        let stderr = "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=2):\n\
+                      The operation couldn't be completed. No such file or directory\n\
+                      No such file or directory\n";
+        let condensed = condense(stderr);
+        assert!(!condensed.contains('\n'), "got: {condensed}");
+        assert!(condensed.starts_with("An error was encountered"));
+    }
+
+    #[test]
+    fn condense_of_blank_output_is_empty() {
+        assert_eq!(condense("  \n\n "), "");
     }
 
     #[test]
