@@ -27,6 +27,7 @@ fn main() {
 fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Devices => devices(cli),
+        Command::Groups { bundle_id } => groups(cli, bundle_id),
     }
 }
 
@@ -66,6 +67,27 @@ fn devices(cli: &Cli) -> Result<()> {
             ],
             &rows,
         )
+    );
+    Ok(())
+}
+
+/// Lists the App Groups declared by an installed app.
+fn groups(cli: &Cli, bundle_id: &str) -> Result<()> {
+    let device = discover::select_device(discover::devices()?, cli.device.as_deref())?;
+    let groups = discover::app_groups(&device, bundle_id)?;
+
+    if cli.json {
+        return print_json(&groups);
+    }
+
+    let rows: Vec<Vec<String>> = groups
+        .iter()
+        .map(|group| vec![group.id.clone(), group.path.display().to_string()])
+        .collect();
+
+    anstream::print!(
+        "{}",
+        ui::table(&[Column::new("GROUP"), Column::dim("PATH")], &rows)
     );
     Ok(())
 }
