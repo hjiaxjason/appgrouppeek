@@ -3,6 +3,8 @@
 //! This module holds the clap definitions and nothing else — no I/O, no logic.
 //! Subcommand help text comes from the `///` doc comments on each variant.
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 /// Inspect iOS App Group containers.
@@ -36,5 +38,22 @@ pub enum Command {
     Groups {
         /// Bundle identifier of the app, e.g. `app.natively`
         bundle_id: String,
+    },
+
+    /// Show the file tree of a container
+    Ls {
+        /// App Group identifier, or the container's UUID
+        group_id: String,
+
+        /// Path within the container to list, relative to its root
+        path: Option<PathBuf>,
+
+        /// Limit how many levels below the starting path are shown
+        #[arg(long, short = 'L', value_name = "N")]
+        depth: Option<usize>,
+
+        /// Include entries whose name begins with a dot
+        #[arg(long, short = 'a')]
+        all: bool,
     },
 }
