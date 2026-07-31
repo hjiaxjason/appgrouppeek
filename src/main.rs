@@ -21,8 +21,12 @@ use crate::source::sim::{Container, EntryKind, WalkOptions};
 use crate::ui::Column;
 use crate::ui::tree::Node;
 
-/// Bytes of a hexdump shown when falling back from a failed decode.
-const DEFAULT_HEX_LIMIT: usize = 2048;
+/// Bytes previewed when falling back from a format that was not decoded.
+///
+/// Deliberately smaller than `--raw`'s default: the header line already said what
+/// the content is, so this is a glance at its shape, not the file. `--raw` is
+/// there for anyone who wants the bytes.
+const DEFAULT_HEX_LIMIT: usize = 512;
 
 fn main() {
     let cli = Cli::parse();
