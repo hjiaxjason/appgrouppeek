@@ -6,6 +6,8 @@
 
 use std::fmt::Write as _;
 
+use unicode_width::UnicodeWidthStr;
+
 /// Style for table headers.
 const HEADER: anstyle::Style = anstyle::Style::new().bold();
 
@@ -49,15 +51,17 @@ impl<'a> Column<'a> {
 
 /// Renders rows as a left-aligned table with a styled header.
 ///
-/// Widths are measured in `char`s rather than bytes so non-ASCII device names
-/// still line up. The final column is not padded, keeping trailing whitespace out
-/// of terminal copy-paste.
+/// Widths are measured in terminal columns rather than bytes or `char`s: a CJK
+/// glyph is a single `char` but occupies two columns, so counting `char`s would
+/// visibly misalign the table for non-ASCII paths and device names.
+///
+/// The final column is not padded, keeping trailing whitespace out of copy-paste.
 pub fn table(columns: &[Column<'_>], rows: &[Vec<String>]) -> String {
-    let mut widths: Vec<usize> = columns.iter().map(|c| c.header.chars().count()).collect();
+    let mut widths: Vec<usize> = columns.iter().map(|c| display_width(c.header)).collect();
     for row in rows {
         for (index, cell) in row.iter().enumerate() {
             if let Some(width) = widths.get_mut(index) {
-                *width = (*width).max(cell.chars().count());
+                *width = (*width).max(display_width(cell));
             }
         }
     }
@@ -93,9 +97,14 @@ pub fn table(columns: &[Column<'_>], rows: &[Vec<String>]) -> String {
     out
 }
 
-/// Spaces needed to pad `cell` out to `width` columns.
+/// How many terminal columns `text` occupies.
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+/// Spaces needed to pad `cell` out to `width` terminal columns.
 fn pad(cell: &str, width: usize) -> String {
-    " ".repeat(width.saturating_sub(cell.chars().count()))
+    " ".repeat(width.saturating_sub(display_width(cell)))
 }
 
 /// Prints an error and its full cause chain to stderr.
@@ -146,6 +155,23 @@ mod tests {
             lines.iter().all(|line| line == line.trim_end()),
             "no trailing whitespace"
         );
+    }
+
+    #[test]
+    fn table_measures_width_in_terminal_columns() {
+        let rendered = table(
+            &[Column::new("NAME"), Column::new("X")],
+            &[
+                vec!["日本語".into(), "a".into()],
+                vec!["ab".into(), "b".into()],
+            ],
+        );
+
+        let lines: Vec<String> = plain(&rendered).lines().map(str::to_string).collect();
+        // "日本語" is 3 chars and 9 bytes, but occupies 6 terminal columns — so it
+        // sets the column width, and "ab" is padded out to match it.
+        assert_eq!(lines[1], "日本語  a");
+        assert_eq!(lines[2], "ab      b");
     }
 
     #[test]
