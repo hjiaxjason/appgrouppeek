@@ -56,4 +56,31 @@ pub enum Command {
         #[arg(long, short = 'a')]
         all: bool,
     },
+
+    /// Show a file from a container, decoded where possible
+    Cat {
+        /// App Group identifier, or the container's UUID
+        group_id: String,
+
+        /// Path to the file, relative to the container root
+        path: PathBuf,
+
+        /// Skip decoding and show the bytes
+        #[arg(long)]
+        raw: bool,
+
+        /// Cap hexdump output at this many bytes; 0 for no cap
+        #[arg(long, value_name = "BYTES", default_value_t = 2048)]
+        limit: usize,
+    },
+
+    /// Show the shared UserDefaults suite for a group
+    Defaults {
+        /// App Group identifier, or the container's UUID
+        group_id: String,
+
+        /// Skip decoding and show the bytes
+        #[arg(long)]
+        raw: bool,
+    },
 }
