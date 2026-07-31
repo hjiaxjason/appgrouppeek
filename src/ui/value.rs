@@ -115,6 +115,10 @@ fn data_preview(bytes: &[u8]) -> String {
 ///
 /// `limit` caps the output; `0` means no cap. When bytes are omitted a trailing
 /// line says how many, so a truncated dump never looks like the whole file.
+///
+/// Runs of identical rows collapse to a single `*`, as `hexdump -C` and `xxd`
+/// do. Container files are full of zero padding, and without this a database
+/// header disappears into a hundred identical lines.
 pub fn hexdump(bytes: &[u8], limit: usize) -> String {
     let shown = if limit == 0 {
         bytes
@@ -123,7 +127,20 @@ pub fn hexdump(bytes: &[u8], limit: usize) -> String {
     };
 
     let mut out = String::new();
+    let mut previous: Option<&[u8]> = None;
+    let mut collapsing = false;
+
     for (index, chunk) in shown.chunks(16).enumerate() {
+        if previous == Some(chunk) {
+            if !collapsing {
+                out.push_str("*\n");
+                collapsing = true;
+            }
+            continue;
+        }
+        previous = Some(chunk);
+        collapsing = false;
+
         let offset = index * 16;
         let _ = write!(out, "{offset:08x}  ");
 
@@ -289,6 +306,31 @@ mod tests {
             dumped,
             "00000000  62 70 6c 69 73 74 30 30  01 02                    |bplist00..|\n"
         );
+    }
+
+    #[test]
+    fn hexdump_collapses_runs_of_identical_rows() {
+        let mut bytes = vec![0x41; 16];
+        bytes.extend(std::iter::repeat_n(0x00, 16 * 5));
+        bytes.extend([0x42; 16]);
+
+        let dumped = hexdump(&bytes, 0);
+        let lines: Vec<&str> = dumped.lines().collect();
+
+        // The 80 zero bytes become one row plus a single `*`.
+        assert_eq!(lines.len(), 4, "got: {dumped}");
+        assert_eq!(lines[2], "*");
+        assert!(
+            lines[3].starts_with("00000060"),
+            "offset after the run is exact"
+        );
+    }
+
+    #[test]
+    fn hexdump_does_not_collapse_a_single_repeat() {
+        let bytes = [vec![0x00; 16], vec![0x00; 16]].concat();
+        let dumped = hexdump(&bytes, 0);
+        assert_eq!(dumped.lines().count(), 2, "one row plus one `*`: {dumped}");
     }
 
     #[test]
