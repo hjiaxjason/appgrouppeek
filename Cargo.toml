@@ -16,6 +16,9 @@ serde_json = "1"
 # Anstream strips ANSI escapes when stdout is not a terminal; anstyle builds them
 anstream = "0.6"
 anstyle = "1"
+# Unicode-width measures how many terminal columns a string occupies, which is
+# what table alignment needs — CJK glyphs are one char but two columns wide
+unicode-width = "0.2"
 
 [dev-dependencies]
 # Assert_cmd drives the built binary in integration tests
