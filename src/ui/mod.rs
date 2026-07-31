@@ -4,7 +4,10 @@
 //! write time by `anstream` when stdout is not a terminal, so callers never have
 //! to branch on whether colour is wanted.
 
+pub mod tree;
+
 use std::fmt::Write as _;
+use std::time::SystemTime;
 
 use unicode_width::UnicodeWidthStr;
 
@@ -55,7 +58,8 @@ impl<'a> Column<'a> {
 /// glyph is a single `char` but occupies two columns, so counting `char`s would
 /// visibly misalign the table for non-ASCII paths and device names.
 ///
-/// The final column is not padded, keeping trailing whitespace out of copy-paste.
+/// Each line is trimmed of trailing spaces, so a row whose rightmost cells are
+/// empty — a tree's root row, say — does not leave padding behind for copy-paste.
 pub fn table(columns: &[Column<'_>], rows: &[Vec<String>]) -> String {
     let mut widths: Vec<usize> = columns.iter().map(|c| display_width(c.header)).collect();
     for row in rows {
@@ -69,37 +73,85 @@ pub fn table(columns: &[Column<'_>], rows: &[Vec<String>]) -> String {
     let mut out = String::new();
     let last = columns.len().saturating_sub(1);
 
+    let mut line = String::new();
     for (index, column) in columns.iter().enumerate() {
         let padding = pad(column.header, widths.get(index).copied().unwrap_or(0));
-        let _ = write!(out, "{HEADER}{}{HEADER:#}", column.header);
+        let _ = write!(line, "{HEADER}{}{HEADER:#}", column.header);
         if index != last {
-            let _ = write!(out, "{padding}  ");
+            let _ = write!(line, "{padding}  ");
         }
     }
-    out.push('\n');
+    push_line(&mut out, &line);
 
     for row in rows {
+        line.clear();
         for (index, cell) in row.iter().enumerate() {
             let padding = pad(cell, widths.get(index).copied().unwrap_or(0));
             let dim = columns.get(index).is_some_and(|column| column.dim);
-            if dim {
-                let _ = write!(out, "{DIM}{cell}{DIM:#}");
+            if dim && !cell.is_empty() {
+                let _ = write!(line, "{DIM}{cell}{DIM:#}");
             } else {
-                out.push_str(cell);
+                line.push_str(cell);
             }
             if index != last {
-                let _ = write!(out, "{padding}  ");
+                let _ = write!(line, "{padding}  ");
             }
         }
-        out.push('\n');
+        push_line(&mut out, &line);
     }
 
     out
 }
 
+/// Appends a line with its trailing padding removed.
+fn push_line(out: &mut String, line: &str) {
+    out.push_str(line.trim_end_matches(' '));
+    out.push('\n');
+}
+
 /// How many terminal columns `text` occupies.
 fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
+}
+
+/// Formats a byte count for humans.
+///
+/// Uses binary multiples, since that is what the filesystem reports, but the
+/// familiar `KB`/`MB` labels. Exact byte counts are kept below 1 KiB because at
+/// that scale the precise number is usually what you are checking.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
+    const STEP: f64 = 1024.0;
+
+    if bytes < STEP as u64 {
+        return format!("{bytes} B");
+    }
+
+    let mut value = bytes as f64 / STEP;
+    let mut unit = 0;
+    while value >= STEP && unit + 1 < UNITS.len() {
+        value /= STEP;
+        unit += 1;
+    }
+
+    // One decimal below 10 keeps 1.5 KB readable without noise at 250 KB.
+    if value < 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
+/// Formats a timestamp in local time, to the minute.
+///
+/// Returns an empty string when the filesystem reported no time, so the column
+/// simply stays blank rather than showing a fabricated epoch.
+pub fn format_time(time: Option<SystemTime>) -> String {
+    time.map_or_else(String::new, |time| {
+        chrono::DateTime::<chrono::Local>::from(time)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
+    })
 }
 
 /// Spaces needed to pad `cell` out to `width` terminal columns.
@@ -181,5 +233,52 @@ mod tests {
     fn table_renders_header_only_when_there_are_no_rows() {
         let rendered = table(&[Column::new("NAME")], &[]);
         assert_eq!(plain(&rendered), "NAME\n");
+    }
+
+    #[test]
+    fn table_leaves_no_padding_when_trailing_cells_are_empty() {
+        // A tree's root row has a label but no size or mtime; it must not trail
+        // spaces out to the width of the columns it left blank.
+        let rendered = table(
+            &[
+                Column::new("NAME"),
+                Column::new("SIZE"),
+                Column::dim("MODIFIED"),
+            ],
+            &[
+                vec!["group.example".into(), String::new(), String::new()],
+                vec!["child".into(), "266 B".into(), "2026-07-30 21:36".into()],
+            ],
+        );
+
+        for line in plain(&rendered).lines() {
+            assert_eq!(line, line.trim_end(), "line has trailing padding: {line:?}");
+        }
+    }
+
+    #[test]
+    fn human_size_keeps_exact_bytes_below_a_kilobyte() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(266), "266 B");
+        assert_eq!(human_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn human_size_scales_to_larger_units() {
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(256 * 1024), "256 KB");
+        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn format_time_is_blank_when_unknown() {
+        assert_eq!(format_time(None), "");
+    }
+
+    #[test]
+    fn format_time_renders_to_the_minute() {
+        let rendered = format_time(Some(SystemTime::UNIX_EPOCH));
+        assert_eq!(rendered.len(), "2026-07-30 21:36".len(), "got: {rendered}");
     }
 }
