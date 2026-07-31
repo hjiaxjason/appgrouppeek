@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>aBool</key>
+	<true/>
+	<key>aDate</key>
+	<date>2026-07-31T15:14:38Z</date>
+	<key>aNegativeInteger</key>
+	<integer>-17</integer>
+	<key>aReal</key>
+	<real>3.5</real>
+	<key>aString</key>
+	<string>hello</string>
+	<key>anArray</key>
+	<array>
+		<string>one</string>
+		<integer>2</integer>
+		<false/>
+	</array>
+	<key>anInteger</key>
+	<integer>42</integer>
+	<key>emptyString</key>
+	<string></string>
+	<key>nested</key>
+	<dict>
+		<key>deeper</key>
+		<dict>
+			<key>leaf</key>
+			<string>bottom</string>
+		</dict>
+		<key>inner</key>
+		<string>value</string>
+	</dict>
+	<key>someData</key>
+	<data>aGVsbG8=</data>
+</dict>
+</plist>
